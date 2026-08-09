@@ -166,6 +166,7 @@ let FILTROS = {
   comisiones: [],     // array vacío = todas
   bloques: [],         // array vacío = todos
   tipos: [],            // array vacío = todos
+  autores: [],           // array vacío = todos
   etapas: [],           // array vacío = todas
   fechaDesde: "",       // "YYYY-MM-DD" o ""
   fechaHasta: "",       // "YYYY-MM-DD" o ""
@@ -200,6 +201,49 @@ function esAfirmativo(valor) {
 function escapeHtml(str) {
   if (str === null || str === undefined) return "";
   return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Recorta espacios al principio/final y colapsa espacios dobles internos
+// (una causa muy común de que "Salud" y "Salud " —con un espacio de más
+// al final, invisible en la planilla— aparezcan como dos filtros distintos).
+function limpiarEspacios(v) {
+  return String(v || "").replace(/\s+/g, " ").trim();
+}
+
+// A veces la misma comisión/bloque/autor está cargado con variaciones
+// menores (espacios de más, mayúsculas/minúsculas distintas) en filas
+// distintas del Sheet. Esta función arma un mapa "valor normalizado ->
+// mejor variante" para que todas esas filas se agrupen bajo un solo
+// filtro en vez de aparecer duplicadas.
+function construirMapaCanonico(valoresCrudos) {
+  const porClave = new Map(); // clave normalizada -> Map(variante -> cantidad)
+  valoresCrudos.forEach((raw) => {
+    const val = limpiarEspacios(raw);
+    if (!val) return;
+    const clave = normaliza(val);
+    if (!clave) return;
+    if (!porClave.has(clave)) porClave.set(clave, new Map());
+    const sub = porClave.get(clave);
+    sub.set(val, (sub.get(val) || 0) + 1);
+  });
+  const canonico = new Map(); // clave normalizada -> variante elegida
+  porClave.forEach((sub, clave) => {
+    let mejorLabel = null, mejorCantidad = -1;
+    sub.forEach((cantidad, label) => {
+      if (cantidad > mejorCantidad || (cantidad === mejorCantidad && (mejorLabel === null || label < mejorLabel))) {
+        mejorLabel = label; mejorCantidad = cantidad;
+      }
+    });
+    canonico.set(clave, mejorLabel);
+  });
+  return canonico;
+}
+
+function canonicalizar(mapa, raw, fallback) {
+  const val = limpiarEspacios(raw);
+  if (!val) return fallback;
+  const clave = normaliza(val);
+  return mapa.get(clave) || val;
 }
 
 function showToast(msg, isError = false) {
@@ -292,12 +336,23 @@ function reiniciarAutoRefresh() {
 
 function getAllItems() {
   if (!RAW_DATA || !RAW_DATA[NOMBRE_HOJA]) return [];
-  return RAW_DATA[NOMBRE_HOJA].rows.map((row) => ({
+  const rows = RAW_DATA[NOMBRE_HOJA].rows;
+
+  // Un solo mapa de "variante -> canónica" por columna, calculado sobre
+  // todas las filas, para que los filtros no muestren duplicados casi
+  // idénticos (ver limpiarEspacios / construirMapaCanonico más arriba).
+  const mapaComision = construirMapaCanonico(rows.map((r) => r[COL.comision]));
+  const mapaBloque = construirMapaCanonico(rows.map((r) => r[COL.bloque]));
+  const mapaTipo = construirMapaCanonico(rows.map((r) => r[COL.tipo]));
+  const mapaAutor = construirMapaCanonico(rows.map((r) => r[COL.autor]));
+
+  return rows.map((row) => ({
     expediente: String(row[COL.expediente] || "(sin número)"),
     sumario: String(row[COL.sumario] || ""),
-    comision: row[COL.comision] || "Sin comisión",
-    bloque: row[COL.bloque] || "Sin bloque",
-    tipo: row[COL.tipo] || "Sin tipo",
+    comision: canonicalizar(mapaComision, row[COL.comision], "Sin comisión"),
+    bloque: canonicalizar(mapaBloque, row[COL.bloque], "Sin bloque"),
+    tipo: canonicalizar(mapaTipo, row[COL.tipo], "Sin tipo"),
+    autor: canonicalizar(mapaAutor, row[COL.autor], "Sin autor/a"),
     etapa: getEtapa(row),
     anio: getAnio(row),
     fechas: getFechasDelItem(row),
@@ -325,6 +380,7 @@ function getItemsFiltrados() {
   if (FILTROS.comisiones.length > 0) items = items.filter((i) => FILTROS.comisiones.includes(i.comision));
   if (FILTROS.bloques.length > 0) items = items.filter((i) => FILTROS.bloques.includes(i.bloque));
   if (FILTROS.tipos.length > 0) items = items.filter((i) => FILTROS.tipos.includes(i.tipo));
+  if (FILTROS.autores.length > 0) items = items.filter((i) => FILTROS.autores.includes(i.autor));
   if (FILTROS.etapas.length > 0) items = items.filter((i) => FILTROS.etapas.includes(i.etapa.id));
   if (FILTROS.fechaDesde || FILTROS.fechaHasta) {
     items = items.filter((i) => fechaEnRango(i.fechas, FILTROS.fechaDesde, FILTROS.fechaHasta));
@@ -519,17 +575,37 @@ function renderGraficos(items) {
    RENDER: filtros
    ========================================================================= */
 
-function labelComisiones() {
-  const n = FILTROS.comisiones.length;
-  if (n === 0) return "Todas las comisiones";
-  if (n === 1) return FILTROS.comisiones[0];
-  return `${n} comisiones seleccionadas`;
+function labelMultiselect(seleccionados, todosLabel) {
+  const n = seleccionados.length;
+  if (n === 0) return todosLabel;
+  if (n === 1) return seleccionados[0];
+  return `${n} seleccionados`;
+}
+
+function htmlMultiselect(idPrefix, valores, seleccionados, todosLabel, sinDatosLabel) {
+  return `
+    <div class="multiselect" id="ms-${idPrefix}">
+      <button type="button" class="multiselect-toggle" id="ms-${idPrefix}-toggle" data-todos-label="${escapeHtml(todosLabel)}">
+        <span>${escapeHtml(labelMultiselect(seleccionados, todosLabel))}</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="multiselect-menu" id="ms-${idPrefix}-menu">
+        ${valores.length ? valores.map((v) => `
+          <label class="multiselect-option">
+            <input type="checkbox" value="${escapeHtml(v)}" ${seleccionados.includes(v) ? "checked" : ""}>
+            <span>${escapeHtml(v)}</span>
+          </label>
+        `).join("") : `<div class="empty-state" style="padding:14px 8px;">${escapeHtml(sinDatosLabel)}</div>`}
+      </div>
+    </div>
+  `;
 }
 
 function renderFiltros() {
   const comisiones = valoresUnicos("comision");
   const bloques = valoresUnicos("bloque");
   const tipos = valoresUnicos("tipo");
+  const autores = valoresUnicos("autor");
 
   const html = `
     <div class="filter-group" style="grid-column: span 2;">
@@ -546,20 +622,11 @@ function renderFiltros() {
     </div>
     <div class="filter-group">
       <label>Comisión</label>
-      <div class="multiselect" id="ms-comisiones">
-        <button type="button" class="multiselect-toggle" id="ms-comisiones-toggle">
-          <span>${labelComisiones()}</span>
-          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
-        </button>
-        <div class="multiselect-menu" id="ms-comisiones-menu">
-          ${comisiones.length ? comisiones.map((c) => `
-            <label class="multiselect-option">
-              <input type="checkbox" value="${escapeHtml(c)}" ${FILTROS.comisiones.includes(c) ? "checked" : ""}>
-              <span>${escapeHtml(c)}</span>
-            </label>
-          `).join("") : `<div class="empty-state" style="padding:14px 8px;">Sin comisiones cargadas.</div>`}
-        </div>
-      </div>
+      ${htmlMultiselect("comisiones", comisiones, FILTROS.comisiones, "Todas las comisiones", "Sin comisiones cargadas.")}
+    </div>
+    <div class="filter-group">
+      <label>Autor/a</label>
+      ${htmlMultiselect("autores", autores, FILTROS.autores, "Todos los autores/as", "Sin autores/as cargados.")}
     </div>
     <div class="filter-group" style="grid-column: span 2;">
       <label>Bloque <span style="text-transform:none; font-weight:400; opacity:0.7;">(elegí uno o varios)</span></label>
@@ -600,7 +667,8 @@ function renderFiltros() {
     FILTROS.fechaHasta = e.target.value;
     renderAll();
   });
-  attachComisionesDropdown();
+  attachMultiselect("comisiones", (seleccion) => { FILTROS.comisiones = seleccion; });
+  attachMultiselect("autores", (seleccion) => { FILTROS.autores = seleccion; });
   document.querySelectorAll("#f-bloques .pill").forEach((pill) => {
     pill.addEventListener("click", () => togglePill(FILTROS.bloques, pill.dataset.bloque));
   });
@@ -611,18 +679,18 @@ function renderFiltros() {
     pill.addEventListener("click", () => togglePill(FILTROS.etapas, pill.dataset.etapa));
   });
   document.getElementById("f-clear").addEventListener("click", () => {
-    FILTROS = { comisiones: [], bloques: [], tipos: [], etapas: [], fechaDesde: "", fechaHasta: "", busqueda: "" };
+    FILTROS = { comisiones: [], bloques: [], tipos: [], autores: [], etapas: [], fechaDesde: "", fechaHasta: "", busqueda: "" };
     renderAll();
   });
 }
 
-// El desplegable de comisiones no se re-renderiza en cada click (a diferencia
-// de los filtros "pill"), para que el menú quede abierto mientras se van
-// tildando varias comisiones seguidas.
-function attachComisionesDropdown() {
-  const wrap = document.getElementById("ms-comisiones");
-  const toggle = document.getElementById("ms-comisiones-toggle");
-  const menu = document.getElementById("ms-comisiones-menu");
+// Los desplegables multi-selección no se re-renderizan enteros en cada
+// click (a diferencia de los filtros "pill"), para que el menú quede
+// abierto mientras se van tildando varias opciones seguidas.
+function attachMultiselect(idPrefix, onChange) {
+  const wrap = document.getElementById(`ms-${idPrefix}`);
+  const toggle = document.getElementById(`ms-${idPrefix}-toggle`);
+  const menu = document.getElementById(`ms-${idPrefix}-menu`);
   if (!wrap || !toggle || !menu) return;
 
   toggle.addEventListener("click", (e) => {
@@ -632,9 +700,11 @@ function attachComisionesDropdown() {
 
   menu.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
     cb.addEventListener("change", () => {
-      FILTROS.comisiones = Array.from(menu.querySelectorAll('input[type="checkbox"]:checked')).map((c) => c.value);
+      const seleccion = Array.from(menu.querySelectorAll('input[type="checkbox"]:checked')).map((c) => c.value);
+      onChange(seleccion);
       const labelEl = toggle.querySelector("span");
-      if (labelEl) labelEl.textContent = labelComisiones();
+      const todosLabel = toggle.dataset.todosLabel || "Todos";
+      if (labelEl) labelEl.textContent = labelMultiselect(seleccion, todosLabel);
       renderOverview(); renderKanban(); renderTabla();
     });
   });
@@ -720,6 +790,7 @@ function abrirModal(rowNumber) {
 
   const resumen = String(item.row[COL.resumen] || "").trim();
   const observaciones = String(item.row[COL.observaciones] || "").trim();
+  const otrosGiros = String(item.row[COL.otrosGiros] || "").trim();
 
   let infoExtra = "";
   const numDespacho = String(item.row[COL.numeroDespacho] || "").trim();
@@ -753,6 +824,13 @@ function abrirModal(rowNumber) {
       <div><div class="modal-label">¿Quienes firman dictamen?</div><div class="modal-text">${escapeHtml(item.row[COL.firmanDictamen] || "—")}</div></div>
       <div><div class="modal-label">¿Quienes no firman dictamen?</div><div class="modal-text">${escapeHtml(item.row[COL.noFirmanDictamen] || "—")}</div></div>
     </div>
+
+    ${otrosGiros ? `
+      <div class="modal-section">
+        <div class="modal-label">¿Tiene otros giros?</div>
+        <div class="modal-text">${escapeHtml(otrosGiros).replace(/\n/g, "<br>")}</div>
+      </div>
+    ` : ""}
 
     ${observaciones ? `
       <div class="modal-section">
