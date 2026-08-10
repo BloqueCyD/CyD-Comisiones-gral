@@ -6,8 +6,11 @@
 // Se genera al desplegar el Code.gs de este mismo paquete. Ver INSTRUCCIONES.md.
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzDTgbG6cNP5JA5Py8Q4ZWiWC6w1v-hGgb5sfnSTNoUIzfw2NeTzw7mbi25F6tqj4xE4g/exec";
 
-// Cada cuánto se vuelve a sincronizar automáticamente (ms). 60000 = 1 minuto.
-const AUTO_REFRESH_MS = 60000;
+// Cada cuánto se vuelve a sincronizar automáticamente (ms). 20 minutos:
+// para este tipo de datos no hace falta chequear más seguido, y así se
+// minimizan las interrupciones mientras estás mirando la página. El botón
+// "Actualizar" de arriba siempre funciona al toque, sin esperar este plazo.
+const AUTO_REFRESH_MS = 20 * 60 * 1000;
 
 // Nombre de la hoja/pestaña dentro del Google Sheet que contiene los datos.
 const NOMBRE_HOJA = "2026";
@@ -285,10 +288,41 @@ function animarNumero(el, destino, duracionMs = 700) {
    CARGA DE DATOS
    ========================================================================= */
 
+// Guarda dónde estaba parado el usuario (scroll de la página, de la tabla
+// y de cada columna del Kanban) para restaurarlo después de volver a
+// construir el HTML. Sin esto, cada actualización automática "reiniciaba"
+// la vista al tope de la página.
+function capturarScroll() {
+  const estado = {
+    pagina: window.scrollY,
+    tabla: document.getElementById("table-scroll")?.scrollTop || 0,
+    kanban: {},
+  };
+  document.querySelectorAll(".kcol-body").forEach((col) => {
+    const etapaId = col.closest(".kcol")?.dataset.etapaId;
+    if (etapaId) estado.kanban[etapaId] = col.scrollTop;
+  });
+  return estado;
+}
+
+function restaurarScroll(estado) {
+  if (!estado) return;
+  requestAnimationFrame(() => {
+    window.scrollTo(0, estado.pagina);
+    const tabla = document.getElementById("table-scroll");
+    if (tabla) tabla.scrollTop = estado.tabla;
+    document.querySelectorAll(".kcol-body").forEach((col) => {
+      const etapaId = col.closest(".kcol")?.dataset.etapaId;
+      if (etapaId && estado.kanban[etapaId] !== undefined) col.scrollTop = estado.kanban[etapaId];
+    });
+  });
+}
+
 async function cargarDatos(manual = false) {
   const btn = document.getElementById("refresh-btn");
   btn.classList.add("spinning");
   setSyncStatus("loading", manual ? "Actualizando…" : "Sincronizando…");
+  const scrollPrevio = capturarScroll();
 
   try {
     const res = await fetch(APPS_SCRIPT_URL + "?action=getAll&_=" + Date.now());
@@ -305,6 +339,7 @@ async function cargarDatos(manual = false) {
     document.getElementById("footer-time").textContent = new Date().toLocaleString("es-AR");
 
     render();
+    restaurarScroll(scrollPrevio);
   } catch (err) {
     console.error(err);
     setSyncStatus("error", "Sin conexión");
@@ -319,7 +354,7 @@ async function cargarDatos(manual = false) {
           implementada como "Cualquier usuario" puede acceder, y probá actualizar de nuevo.
         </div>
       </div>`;
-    if (RAW_DATA) render(); // mantenemos lo último que funcionó
+    if (RAW_DATA) { render(); restaurarScroll(scrollPrevio); } // mantenemos lo último que funcionó
   } finally {
     btn.classList.remove("spinning");
   }
@@ -734,7 +769,7 @@ function renderKanban() {
   board.innerHTML = ETAPAS.map((etapa) => {
     const itemsEtapa = items.filter((i) => i.etapa.id === etapa.id);
     return `
-      <div class="kcol state-${etapa.id}" style="--kcolor:${etapa.color}">
+      <div class="kcol state-${etapa.id}" data-etapa-id="${etapa.id}" style="--kcolor:${etapa.color}">
         <div class="kcol-head">
           <span class="title">${etapa.nombre}</span>
           <span class="count">${itemsEtapa.length}</span>
@@ -979,6 +1014,27 @@ function render() {
 /* =========================================================================
    INIT
    ========================================================================= */
+
+// Le pedimos al navegador que NO restaure el scroll por su cuenta (algunos
+// navegadores lo hacen automáticamente al reabrir una pestaña o volver con
+// "atrás"), y forzamos que la página arranque siempre arriba de todo.
+if ("scrollRestoration" in history) {
+  history.scrollRestoration = "manual";
+}
+window.scrollTo(0, 0);
+
+// Si el navegador restaura esta página desde su caché de "atrás/adelante"
+// (bfcache) en vez de cargarla de nuevo de cero, FILTROS seguiría teniendo
+// el valor que tenía en ese momento. Lo reiniciamos a mano para que, sin
+// importar cómo se vuelva a esta pestaña, siempre se vea "en cero": sin
+// filtros aplicados y arriba de todo.
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) {
+    FILTROS = { comisiones: [], bloques: [], tipos: [], autores: [], etapas: [], fechaDesde: "", fechaHasta: "", busqueda: "" };
+    window.scrollTo(0, 0);
+    if (RAW_DATA) renderAll();
+  }
+});
 
 cargarDatos(false);
 reiniciarAutoRefresh();
