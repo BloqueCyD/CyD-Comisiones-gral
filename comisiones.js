@@ -172,6 +172,7 @@ let FILTROS = {
   autores: [],           // array vacío = todos
   fechasSancion: [],     // array vacío = todas (fechas de aprobación en el recinto)
   soloTablas: false,     // true = solo sancionados "por tablas"
+  soloConDespacho: false, // true = solo sancionados que NO fueron por tablas
   etapas: [],           // array vacío = todas
   fechaDesde: "",       // "YYYY-MM-DD" o ""
   fechaHasta: "",       // "YYYY-MM-DD" o ""
@@ -422,6 +423,7 @@ function getItemsFiltrados() {
   if (FILTROS.autores.length > 0) items = items.filter((i) => FILTROS.autores.includes(i.autor));
   if (FILTROS.fechasSancion.length > 0) items = items.filter((i) => i.fechaSancion && FILTROS.fechasSancion.includes(i.fechaSancion));
   if (FILTROS.soloTablas) items = items.filter((i) => i.etapa.id === "sancionado" && i.porTablas);
+  if (FILTROS.soloConDespacho) items = items.filter((i) => i.etapa.id === "sancionado" && !i.porTablas);
   if (FILTROS.etapas.length > 0) items = items.filter((i) => FILTROS.etapas.includes(i.etapa.id));
   if (FILTROS.fechaDesde || FILTROS.fechaHasta) {
     items = items.filter((i) => fechaEnRango(i.fechas, FILTROS.fechaDesde, FILTROS.fechaHasta));
@@ -720,9 +722,10 @@ function renderFiltros() {
       ${htmlMultiselect("fechas-sancion", fechasSancion, FILTROS.fechasSancion, "Todas las fechas", "Todavía no hay proyectos sancionados.")}
     </div>
     <div class="filter-group">
-      <label>Sancionados <span style="text-transform:none; font-weight:400; opacity:0.7;">(solo los de tablas)</span></label>
+      <label>Sancionados</label>
       <div class="filter-pills">
         <span class="pill ${FILTROS.soloTablas ? "active" : ""}" id="f-tablas">Tablas</span>
+        <span class="pill ${FILTROS.soloConDespacho ? "active" : ""}" id="f-con-despacho">Sancionado con despacho</span>
       </div>
     </div>
     <div class="filter-group" style="justify-content:flex-end;">
@@ -746,8 +749,16 @@ function renderFiltros() {
   attachMultiselect("comisiones", (seleccion) => { FILTROS.comisiones = seleccion; });
   attachMultiselect("autores", (seleccion) => { FILTROS.autores = seleccion; });
   attachMultiselect("fechas-sancion", (seleccion) => { FILTROS.fechasSancion = seleccion; });
+  // "Tablas" y "Sancionado con despacho" son opuestos entre sí (uno es
+  // justo lo contrario del otro), así que al prender uno se apaga el otro.
   document.getElementById("f-tablas").addEventListener("click", () => {
     FILTROS.soloTablas = !FILTROS.soloTablas;
+    if (FILTROS.soloTablas) FILTROS.soloConDespacho = false;
+    renderAll();
+  });
+  document.getElementById("f-con-despacho").addEventListener("click", () => {
+    FILTROS.soloConDespacho = !FILTROS.soloConDespacho;
+    if (FILTROS.soloConDespacho) FILTROS.soloTablas = false;
     renderAll();
   });
   document.querySelectorAll("#f-bloques .pill").forEach((pill) => {
@@ -760,7 +771,7 @@ function renderFiltros() {
     pill.addEventListener("click", () => togglePill(FILTROS.etapas, pill.dataset.etapa));
   });
   document.getElementById("f-clear").addEventListener("click", () => {
-    FILTROS = { comisiones: [], bloques: [], tipos: [], autores: [], fechasSancion: [], soloTablas: false, etapas: [], fechaDesde: "", fechaHasta: "", busqueda: "" };
+    FILTROS = { comisiones: [], bloques: [], tipos: [], autores: [], fechasSancion: [], soloTablas: false, soloConDespacho: false, etapas: [], fechaDesde: "", fechaHasta: "", busqueda: "" };
     renderAll();
   });
 }
@@ -1076,7 +1087,7 @@ window.scrollTo(0, 0);
 // filtros aplicados y arriba de todo.
 window.addEventListener("pageshow", (event) => {
   if (event.persisted) {
-    FILTROS = { comisiones: [], bloques: [], tipos: [], autores: [], fechasSancion: [], soloTablas: false, etapas: [], fechaDesde: "", fechaHasta: "", busqueda: "" };
+    FILTROS = { comisiones: [], bloques: [], tipos: [], autores: [], fechasSancion: [], soloTablas: false, soloConDespacho: false, etapas: [], fechaDesde: "", fechaHasta: "", busqueda: "" };
     window.scrollTo(0, 0);
     if (RAW_DATA) renderAll();
   }
