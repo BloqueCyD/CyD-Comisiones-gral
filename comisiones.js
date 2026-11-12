@@ -170,6 +170,8 @@ let FILTROS = {
   bloques: [],         // array vacío = todos
   tipos: [],            // array vacío = todos
   autores: [],           // array vacío = todos
+  fechasSancion: [],     // array vacío = todas (fechas de aprobación en el recinto)
+  soloTablas: false,     // true = solo sancionados "por tablas"
   etapas: [],           // array vacío = todas
   fechaDesde: "",       // "YYYY-MM-DD" o ""
   fechaHasta: "",       // "YYYY-MM-DD" o ""
@@ -388,6 +390,8 @@ function getAllItems() {
     bloque: canonicalizar(mapaBloque, row[COL.bloque], "Sin bloque"),
     tipo: canonicalizar(mapaTipo, row[COL.tipo], "Sin tipo"),
     autor: canonicalizar(mapaAutor, row[COL.autor], "Sin autor/a"),
+    fechaSancion: formatFecha(row[COL.fechaAprobacion]),
+    porTablas: esPorTablas(row[COL.observaciones]),
     etapa: getEtapa(row),
     anio: getAnio(row),
     fechas: getFechasDelItem(row),
@@ -416,6 +420,8 @@ function getItemsFiltrados() {
   if (FILTROS.bloques.length > 0) items = items.filter((i) => FILTROS.bloques.includes(i.bloque));
   if (FILTROS.tipos.length > 0) items = items.filter((i) => FILTROS.tipos.includes(i.tipo));
   if (FILTROS.autores.length > 0) items = items.filter((i) => FILTROS.autores.includes(i.autor));
+  if (FILTROS.fechasSancion.length > 0) items = items.filter((i) => i.fechaSancion && FILTROS.fechasSancion.includes(i.fechaSancion));
+  if (FILTROS.soloTablas) items = items.filter((i) => i.etapa.id === "sancionado" && i.porTablas);
   if (FILTROS.etapas.length > 0) items = items.filter((i) => FILTROS.etapas.includes(i.etapa.id));
   if (FILTROS.fechaDesde || FILTROS.fechaHasta) {
     items = items.filter((i) => fechaEnRango(i.fechas, FILTROS.fechaDesde, FILTROS.fechaHasta));
@@ -429,6 +435,30 @@ function getItemsFiltrados() {
     );
   }
   return items;
+}
+
+// Detecta si la columna Observaciones indica que se aprobó "sobre tablas".
+// Busca la palabra suelta "tablas" (o la variante "tables") en cualquier
+// parte del texto, sin importar mayúsculas/minúsculas ni tildes, y aunque
+// la celda tenga más contenido alrededor (ej: "Sancionado sobre TABLAS.",
+// "s/tablas", "Aprobado sobre tablas en la sesión del 12/05").
+function esPorTablas(observaciones) {
+  const texto = normaliza(observaciones);
+  if (!texto) return false;
+  return /\btabl(?:as|es)\b/.test(texto);
+}
+
+// Fechas de sanción distintas que existen hoy en el Sheet, de la más
+// reciente a la más antigua. Se recalcula con cada actualización de datos,
+// así que las fechas nuevas aparecen solas en el desplegable.
+function fechasSancionUnicas() {
+  const mapa = new Map(); // "dd/mm/aaaa" -> timestamp (para ordenar)
+  getAllItems().forEach((i) => {
+    if (!i.fechaSancion || mapa.has(i.fechaSancion)) return;
+    const f = parsearFecha(i.row[COL.fechaAprobacion]);
+    if (f) mapa.set(i.fechaSancion, f.getTime());
+  });
+  return Array.from(mapa.entries()).sort((a, b) => b[1] - a[1]).map(([label]) => label);
 }
 
 function valoresUnicos(campo) {
@@ -641,6 +671,7 @@ function renderFiltros() {
   const bloques = valoresUnicos("bloque");
   const tipos = valoresUnicos("tipo");
   const autores = valoresUnicos("autor");
+  const fechasSancion = fechasSancionUnicas();
 
   const html = `
     <div class="filter-group" style="grid-column: span 2;">
@@ -684,6 +715,16 @@ function renderFiltros() {
         }).join("")}
       </div>
     </div>
+    <div class="filter-group">
+      <label>Fecha de sanción</label>
+      ${htmlMultiselect("fechas-sancion", fechasSancion, FILTROS.fechasSancion, "Todas las fechas", "Todavía no hay proyectos sancionados.")}
+    </div>
+    <div class="filter-group">
+      <label>Sancionados <span style="text-transform:none; font-weight:400; opacity:0.7;">(solo los de tablas)</span></label>
+      <div class="filter-pills">
+        <span class="pill ${FILTROS.soloTablas ? "active" : ""}" id="f-tablas">Tablas</span>
+      </div>
+    </div>
     <div class="filter-group" style="justify-content:flex-end;">
       <button class="clear-filters" id="f-clear">Limpiar filtros</button>
     </div>
@@ -704,6 +745,11 @@ function renderFiltros() {
   });
   attachMultiselect("comisiones", (seleccion) => { FILTROS.comisiones = seleccion; });
   attachMultiselect("autores", (seleccion) => { FILTROS.autores = seleccion; });
+  attachMultiselect("fechas-sancion", (seleccion) => { FILTROS.fechasSancion = seleccion; });
+  document.getElementById("f-tablas").addEventListener("click", () => {
+    FILTROS.soloTablas = !FILTROS.soloTablas;
+    renderAll();
+  });
   document.querySelectorAll("#f-bloques .pill").forEach((pill) => {
     pill.addEventListener("click", () => togglePill(FILTROS.bloques, pill.dataset.bloque));
   });
@@ -714,7 +760,7 @@ function renderFiltros() {
     pill.addEventListener("click", () => togglePill(FILTROS.etapas, pill.dataset.etapa));
   });
   document.getElementById("f-clear").addEventListener("click", () => {
-    FILTROS = { comisiones: [], bloques: [], tipos: [], autores: [], etapas: [], fechaDesde: "", fechaHasta: "", busqueda: "" };
+    FILTROS = { comisiones: [], bloques: [], tipos: [], autores: [], fechasSancion: [], soloTablas: false, etapas: [], fechaDesde: "", fechaHasta: "", busqueda: "" };
     renderAll();
   });
 }
@@ -1030,7 +1076,7 @@ window.scrollTo(0, 0);
 // filtros aplicados y arriba de todo.
 window.addEventListener("pageshow", (event) => {
   if (event.persisted) {
-    FILTROS = { comisiones: [], bloques: [], tipos: [], autores: [], etapas: [], fechaDesde: "", fechaHasta: "", busqueda: "" };
+    FILTROS = { comisiones: [], bloques: [], tipos: [], autores: [], fechasSancion: [], soloTablas: false, etapas: [], fechaDesde: "", fechaHasta: "", busqueda: "" };
     window.scrollTo(0, 0);
     if (RAW_DATA) renderAll();
   }
