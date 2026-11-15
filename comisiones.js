@@ -606,6 +606,11 @@ function renderGraficos(items) {
   const porAutor = Object.entries(porAutorMap).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "es"))
     .map(([a, count]) => ({ id: a, group: "autor", label: a, value: count, active: FILTROS.autores.includes(a) }));
 
+  const porTipoMap = {};
+  items.forEach((i) => { porTipoMap[i.tipo] = (porTipoMap[i.tipo] || 0) + 1; });
+  const porTipo = Object.entries(porTipoMap).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "es"))
+    .map(([t, count]) => ({ id: t, group: "tipo", label: t, value: count, active: FILTROS.tipos.includes(t) }));
+
   cont.innerHTML = `
     <div class="viz-card">
       <div class="viz-card-title">Distribución por etapa <span class="viz-hint">(clic para filtrar)</span></div>
@@ -627,6 +632,10 @@ function renderGraficos(items) {
       <div class="viz-card-title">Autores/as con más proyectos <span class="viz-hint">(según los filtros aplicados · clic para filtrar)</span></div>
       <div class="viz-card-body" style="align-items:flex-start;">${porAutor.length ? `<div style="width:100%; max-height:340px; overflow-y:auto;">${renderRankingHTML(porAutor)}</div>` : `<div class="empty-state">Sin datos con estos filtros.</div>`}</div>
     </div>
+    <div class="viz-card viz-card-wide">
+      <div class="viz-card-title">Tipos de proyecto <span class="viz-hint">(según los filtros aplicados · clic para filtrar)</span></div>
+      <div class="viz-card-body" style="align-items:flex-start;">${porTipo.length ? `<div style="width:100%; max-height:340px; overflow-y:auto;">${renderRankingHTML(porTipo)}</div>` : `<div class="empty-state">Sin datos con estos filtros.</div>`}</div>
+    </div>
   `;
 
   cont.querySelectorAll("[data-legend-id]").forEach((btn) => {
@@ -641,7 +650,7 @@ function renderGraficos(items) {
     btn.addEventListener("click", () => {
       const val = btn.dataset.hbarId;
       const group = btn.dataset.hbarGroup;
-      const lista = group === "comision" ? FILTROS.comisiones : group === "autor" ? FILTROS.autores : FILTROS.bloques;
+      const lista = group === "comision" ? FILTROS.comisiones : group === "autor" ? FILTROS.autores : group === "tipo" ? FILTROS.tipos : FILTROS.bloques;
       const idx = lista.indexOf(val);
       if (idx === -1) lista.push(val); else lista.splice(idx, 1);
       renderAll();
